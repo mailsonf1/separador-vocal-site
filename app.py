@@ -50,6 +50,25 @@ form.addEventListener('submit',async e=>{e.preventDefault();const file=audioFile
 """
 
 
+
+def mvsep_error_message(response):
+    """Lê a mensagem de erro documentada pela MVSEP sem expor credenciais."""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if isinstance(payload, dict):
+        nested = payload.get("data")
+        if isinstance(nested, dict):
+            message = nested.get("message") or nested.get("error")
+            if message:
+                return str(message)[:600]
+        message = payload.get("message") or payload.get("error")
+        if message:
+            return str(message)[:600]
+    body = (getattr(response, "text", "") or "").strip()
+    return body[:600] if body else f"A MVSEP respondeu HTTP {response.status_code} sem informar o motivo."
+
 def allowed_file(filename):
     return bool(filename) and "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
@@ -148,8 +167,18 @@ def separar():
             files={"audiofile": (secure_filename(audio.filename), audio.stream, audio.mimetype or "application/octet-stream")},
             timeout=120,
         )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError:
+            data = {}
+        if not response.ok:
+            detail = mvsep_error_message(response)
+            app.logger.warning("MVSEP rejeitou /separation/create (HTTP %s): %s", response.status_code, detail)
+            return jsonify(error=f"A MVSEP recusou o pedido (HTTP {response.status_code}): {detail}"), 502
+        if isinstance(data, dict) and data.get("success") is False:
+            detail = mvsep_error_message(response)
+            app.logger.warning("MVSEP não criou a separação: %s", detail)
+            return jsonify(error=f"A MVSEP não criou a separação: {detail}"), 502
         job_hash = extract_hash(data)
         if not job_hash:
             message = data.get("message") or data.get("error") or "O serviço não retornou o identificador do processamento." if isinstance(data, dict) else "Resposta inválida do serviço."

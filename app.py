@@ -1,13 +1,14 @@
 
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, request, render_template_string, jsonify, Response
 import os
 import requests
+from urllib.parse import urlparse
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
-MVSEP_API = "https://mvsep.com/api"
+API_BASE = "https://mvsep.com/api"
 
 ALLOWED_EXTENSIONS = {
     "mp3", "wav", "flac", "m4a", "ogg",
@@ -20,7 +21,8 @@ HTML = r"""
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Separador Vocal</title>
+<meta name="theme-color" content="#10131b">
+<title>MFSTUDIO | Separador de Áudio</title>
 
 <style>
 * { box-sizing: border-box; }
@@ -38,51 +40,80 @@ body {
 
 main {
     width: 100%;
-    max-width: 650px;
-    padding: 32px;
-    border-radius: 20px;
+    max-width: 680px;
+    padding: 30px;
+    border-radius: 24px;
     background: #1b2030;
     border: 1px solid #343b50;
+    box-shadow: 0 20px 70px #0005;
 }
 
-h1 { margin: 12px 0; }
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.logo {
+    width: 54px;
+    height: 54px;
+    border-radius: 16px;
+    display: grid;
+    place-items: center;
+    background: #7c5cff;
+    font-size: 28px;
+}
+
+.brand-name {
+    font-size: 23px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+
+.brand-sub {
+    margin-top: 5px;
+    color: #c5b8ff;
+    font-size: 11px;
+    letter-spacing: 2px;
+}
+
+h1 {
+    font-size: clamp(27px, 6vw, 38px);
+    margin: 30px 0 10px;
+}
 
 p {
     color: #c2c8d8;
-    line-height: 1.6;
+    line-height: 1.65;
 }
 
-.tag {
-    display: inline-block;
-    padding: 7px 12px;
-    background: #292344;
-    color: #c5b8ff;
-    border-radius: 20px;
-    font-size: 13px;
+.upload-box {
+    margin-top: 24px;
+    padding: 20px;
+    border: 1px dashed #606982;
+    border-radius: 16px;
+    background: #111522;
 }
 
 input[type=file] {
     display: block;
     width: 100%;
-    padding: 14px;
-    margin: 18px 0;
-    background: #111522;
-    border: 1px dashed #606982;
-    border-radius: 10px;
+    margin-top: 14px;
     color: #dce1ef;
+    font-size: 14px;
 }
 
 button, .download {
     display: block;
     width: 100%;
-    padding: 14px;
-    margin-top: 12px;
+    padding: 15px;
+    margin-top: 14px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 12px;
     background: #7c5cff;
-    color: white;
+    color: #fff;
     font-size: 16px;
-    font-weight: bold;
+    font-weight: 700;
     text-align: center;
     text-decoration: none;
     cursor: pointer;
@@ -90,46 +121,93 @@ button, .download {
 }
 
 button:disabled {
-    opacity: .55;
+    opacity: .6;
     cursor: wait;
 }
 
 .status {
-    margin-top: 18px;
-    padding: 14px;
-    background: #111522;
-    border-radius: 10px;
     display: none;
+    margin-top: 20px;
+    padding: 16px;
+    background: #111522;
+    border: 1px solid #343b50;
+    border-radius: 14px;
     overflow-wrap: anywhere;
 }
 
-.file-link { background: #252c40; }
+.download {
+    background: #252c40;
+    border: 1px solid #414b67;
+    text-align: left;
+}
 
-.small {
-    font-size: 13px;
+.download:hover {
+    background: #343c55;
+}
+
+.features {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 24px;
+}
+
+.feature {
+    padding: 14px;
+    border-radius: 12px;
+    background: #252c40;
+    color: #e4e8f5;
+    font-size: 14px;
+}
+
+.note {
+    font-size: 12px;
     color: #9da7bf;
+    margin-top: 22px;
+}
+
+footer {
+    text-align: center;
+    margin-top: 26px;
+    color: #818ba5;
+    font-size: 12px;
+    letter-spacing: 1px;
+}
+
+@media (max-width: 480px) {
+    main { padding: 22px; }
+    .features { grid-template-columns: 1fr; }
 }
 </style>
 </head>
 
 <body>
 <main>
-    <span class="tag">PROCESSAMENTO POR MVSEP</span>
-    <h1>🎵 Separador Vocal</h1>
+    <div class="brand">
+        <div class="logo">≋</div>
+        <div>
+            <div class="brand-name">MFSTUDIO</div>
+            <div class="brand-sub">SEPARADOR DE ÁUDIO</div>
+        </div>
+    </div>
 
+    <h1>Sua música. Suas faixas.</h1>
     <p>
-        Envie uma música e receba as faixas separadas:
-        voz, bateria, baixo e outros instrumentos.
+        Separe sua música em voz, bateria, baixo e outros instrumentos.
+        Baixe cada faixa individualmente.
     </p>
 
     <form id="uploadForm">
-        <input
-            id="audio"
-            name="audio"
-            type="file"
-            accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac,.aiff,.wma"
-            required
-        >
+        <div class="upload-box">
+            <strong>Escolha sua música</strong>
+            <input
+                id="audio"
+                name="audio"
+                type="file"
+                accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg,.aac,.aiff,.wma"
+                required
+            >
+        </div>
         <button id="submitBtn" type="submit">
             Separar música
         </button>
@@ -137,10 +215,19 @@ button:disabled {
 
     <div id="status" class="status" role="status"></div>
 
-    <p class="small">
-        Arquivos de áudio de até 100 MB.
-        O tempo depende da fila do serviço de processamento.
+    <div class="features">
+        <div class="feature">🎤 Voz isolada</div>
+        <div class="feature">🥁 Bateria</div>
+        <div class="feature">🎸 Baixo</div>
+        <div class="feature">🎹 Outros instrumentos</div>
+    </div>
+
+    <p class="note">
+        Arquivos de áudio de até 100 MB. O tempo de processamento
+        depende do tamanho do arquivo e da fila de tarefas.
     </p>
+
+    <footer>MFSTUDIO · FERRAMENTAS DE ÁUDIO</footer>
 </main>
 
 <script>
@@ -163,7 +250,7 @@ function findFiles(payload) {
     const list = Array.isArray(files)
         ? files
         : Object.entries(files).map(([key, value]) => {
-            if (typeof value === "object" && value !== null) {
+            if (value && typeof value === "object") {
                 return {label: key, ...value};
             }
             return {label: key, url: value};
@@ -171,98 +258,69 @@ function findFiles(payload) {
 
     return list.map((f, i) => {
         if (typeof f === "string") {
-            return {
-                label: "Faixa " + (i + 1),
-                url: f
-            };
+            return {label: "Faixa " + (i + 1), url: f};
         }
 
         const url =
-            f.url ||
-            f.link ||
-            f.download_url ||
-            f.file_url ||
-            f.href;
+            f.url || f.link || f.download_url ||
+            f.file_url || f.href;
 
-        const originalName =
-            f.name ||
-            f.filename ||
-            f.file_name ||
-            f.title ||
-            f.label ||
-            "";
+        const original = [
+            f.name, f.filename, f.file_name, f.title,
+            f.label, url
+        ].filter(Boolean).join(" ").toLowerCase();
 
-        const hint = (
-            String(originalName) + " " + String(url || "")
-        ).toLowerCase();
+        let label = f.name || f.filename || ("Faixa " + (i + 1));
 
-        let label = originalName || ("Faixa " + (i + 1));
-
-        if (hint.includes("vocals") || hint.includes("vocal")) {
-            label = "Voz (vocal isolado)";
-        } else if (
-            hint.includes("drums") ||
-            hint.includes("drum")
-        ) {
+        if (original.includes("vocals") || original.includes("vocal")) {
+            label = "Voz isolada";
+        } else if (original.includes("drums") || original.includes("drum")) {
             label = "Bateria";
-        } else if (hint.includes("bass")) {
+        } else if (original.includes("bass")) {
             label = "Baixo";
-        } else if (
-            hint.includes("other") ||
-            hint.includes("others")
-        ) {
+        } else if (original.includes("other")) {
             label = "Outros instrumentos";
-        } else if (hint.includes("instrumental")) {
+        } else if (original.includes("instrumental")) {
             label = "Instrumental (sem voz)";
         }
 
         return {label, url};
     }).filter(f =>
         typeof f.url === "string" &&
-        /^https?:\/\//i.test(f.url)
+        /^https:\/\//i.test(f.url)
     );
 }
 
-function showDownloadLinks(files, fallbackUrl) {
-    statusBox.textContent = "Separação concluída! Baixe suas faixas:";
+function showDownloadLinks(files) {
+    statusBox.replaceChildren();
+
+    const heading = document.createElement("p");
+    heading.textContent = "Separação concluída! Baixe suas faixas:";
+    statusBox.appendChild(heading);
 
     files.forEach(file => {
         const link = document.createElement("a");
-        link.className = "download file-link";
-        link.href = file.url;
-        link.target = "_blank";
-        link.rel = "noopener";
-        link.download = "";
+        link.className = "download";
+        link.href = "/api/baixar?url=" + encodeURIComponent(file.url);
         link.textContent = "⬇ Baixar " + file.label;
         statusBox.appendChild(link);
     });
 
-    if (files.length === 0 && fallbackUrl &&
-        /^https?:\/\//i.test(fallbackUrl)) {
-        const link = document.createElement("a");
-        link.className = "download file-link";
-        link.href = fallbackUrl;
-        link.target = "_blank";
-        link.rel = "noopener";
-        link.textContent = "Abrir resultado no MVSEP";
-        statusBox.appendChild(link);
-    }
-
-    if (files.length === 0 && !fallbackUrl) {
+    if (!files.length) {
         const message = document.createElement("p");
         message.textContent =
-            "O processamento terminou, mas não encontrei os links das faixas.";
+            "O processamento terminou, mas não foram encontrados links para download.";
         statusBox.appendChild(message);
     }
 }
 
-form.addEventListener("submit", async (event) => {
+form.addEventListener("submit", async event => {
     event.preventDefault();
 
     const file = audioInput.files && audioInput.files[0];
 
     if (!file) {
-        showStatus("Selecione novamente um arquivo de áudio.");
+        showStatus("Selecione um arquivo de áudio.");
         return;
     }
 
@@ -272,7 +330,7 @@ form.addEventListener("submit", async (event) => {
     }
 
     button.disabled = true;
-    showStatus("Enviando sua música ao MVSEP...");
+    showStatus("Enviando sua música...");
 
     try {
         const formData = new FormData();
@@ -286,80 +344,53 @@ form.addEventListener("submit", async (event) => {
         const result = await response.json();
 
         if (!response.ok || !result.success) {
-            throw new Error(
-                result.error || "Não foi possível enviar a música."
-            );
+            throw new Error(result.error || "Não foi possível enviar o arquivo.");
         }
 
-        const hash = result.hash;
-
-        if (!hash) {
-            throw new Error(
-                "O MVSEP não retornou o identificador da tarefa."
-            );
+        if (!result.hash) {
+            throw new Error("O serviço não retornou o identificador da tarefa.");
         }
 
-        showStatus("Música enviada! Aguardando na fila do MVSEP...");
+        showStatus("Música enviada! Aguardando o processamento...");
 
         let finished = false;
-        let attempts = 0;
-        const maxAttempts = 360;
 
-        while (!finished && attempts < maxAttempts) {
+        for (let attempt = 0; attempt < 360 && !finished; attempt++) {
             await new Promise(resolve => setTimeout(resolve, 5000));
-            attempts++;
 
             const statusResponse = await fetch(
-                "/api/status/" + encodeURIComponent(hash)
+                "/api/status/" + encodeURIComponent(result.hash)
             );
 
             const payload = await statusResponse.json();
 
             if (!statusResponse.ok || payload.error) {
-                throw new Error(
-                    payload.error ||
-                    "Erro ao consultar o processamento."
-                );
+                throw new Error(payload.error || "Erro ao consultar o processamento.");
             }
 
             if (payload.status === "done") {
-                showDownloadLinks(
-                    findFiles(payload.result),
-                    payload.link ||
-                    (payload.result &&
-                     payload.result.data &&
-                     payload.result.data.link)
-                );
+                showDownloadLinks(findFiles(payload.result));
                 finished = true;
             } else if (
                 payload.status === "failed" ||
                 payload.status === "not_found"
             ) {
-                throw new Error(
-                    payload.message ||
-                    "O processamento falhou no MVSEP."
-                );
+                throw new Error(payload.message || "Não foi possível separar a música.");
             } else {
                 const messages = {
                     waiting: "Aguardando na fila...",
-                    processing: "Separando as faixas da música...",
+                    processing: "Separando as faixas...",
                     distributing: "Preparando o processamento...",
                     merging: "Finalizando os arquivos..."
                 };
 
-                showStatus(
-                    messages[payload.status] ||
-                    "Processamento em andamento..."
-                );
+                showStatus(messages[payload.status] || "Processamento em andamento...");
             }
         }
 
         if (!finished) {
-            throw new Error(
-                "O processamento está demorando. Tente consultar novamente mais tarde."
-            );
+            throw new Error("O processamento está demorando. Tente novamente mais tarde.");
         }
-
     } catch (error) {
         showStatus("Não foi possível concluir: " + error.message);
     } finally {
@@ -384,7 +415,7 @@ def separar():
     if not token:
         return jsonify(
             success=False,
-            error="A chave MVSEP_API_KEY não está configurada no servidor."
+            error="A configuração do processamento está incompleta."
         ), 500
 
     audio = request.files.get("audio")
@@ -408,7 +439,7 @@ def separar():
 
     try:
         response = requests.post(
-            f"{MVSEP_API}/separation/create",
+            f"{API_BASE}/separation/create",
             data={
                 "api_token": token,
                 "sep_type": "20",
@@ -423,27 +454,25 @@ def separar():
             },
             timeout=90
         )
-
         payload = response.json()
 
     except requests.RequestException:
         return jsonify(
             success=False,
-            error="Não consegui conectar ao MVSEP. Tente novamente."
+            error="Não foi possível enviar a música para processamento."
         ), 502
 
     except ValueError:
         return jsonify(
             success=False,
-            error="O MVSEP retornou uma resposta inesperada."
+            error="Resposta inesperada do serviço de processamento."
         ), 502
 
     if response.status_code >= 400 or not payload.get("success"):
         message = (
             (payload.get("data") or {}).get("message") or
-            "O MVSEP recusou a solicitação. Verifique sua conta e tente novamente."
+            "O processamento não foi aceito. Tente novamente."
         )
-
         return jsonify(success=False, error=message), 400
 
     data = payload.get("data") or {}
@@ -452,14 +481,10 @@ def separar():
     if not job_hash:
         return jsonify(
             success=False,
-            error="O MVSEP não retornou o identificador da tarefa."
+            error="Não foi recebido o identificador do processamento."
         ), 502
 
-    return jsonify(
-        success=True,
-        hash=str(job_hash),
-        message="Tarefa criada."
-    ), 202
+    return jsonify(success=True, hash=str(job_hash)), 202
 
 
 @app.get("/api/status/<job_hash>")
@@ -469,21 +494,20 @@ def status(job_hash):
 
     try:
         response = requests.get(
-            f"{MVSEP_API}/separation/get",
+            f"{API_BASE}/separation/get",
             params={"hash": job_hash},
             timeout=30
         )
-
         payload = response.json()
 
     except requests.RequestException:
         return jsonify(
-            error="Não consegui consultar o MVSEP. Tente novamente."
+            error="Não foi possível consultar o andamento."
         ), 502
 
     except ValueError:
         return jsonify(
-            error="O MVSEP retornou uma resposta inesperada."
+            error="Resposta inesperada durante a consulta."
         ), 502
 
     if response.status_code >= 400 or not payload.get("success"):
@@ -491,7 +515,6 @@ def status(job_hash):
             (payload.get("data") or {}).get("message") or
             "Não foi possível consultar essa tarefa."
         )
-
         return jsonify(error=message), 502
 
     data = payload.get("data") or {}
@@ -499,9 +522,70 @@ def status(job_hash):
     return jsonify(
         status=payload.get("status", "unknown"),
         message=data.get("message", ""),
-        result=payload,
-        link=data.get("link")
+        result=payload
     )
+
+
+@app.get("/api/baixar")
+def baixar():
+    url = request.args.get("url", "")
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+
+    if (
+        parsed.scheme != "https" or
+        not (hostname == "mvsep.com" or hostname.endswith(".mvsep.com")) or
+        parsed.username or parsed.password
+    ):
+        return jsonify(error="Link de download inválido."), 400
+
+    try:
+        upstream = requests.get(
+            url,
+            stream=True,
+            timeout=(15, 120),
+            allow_redirects=False
+        )
+
+        if upstream.status_code in (301, 302, 303, 307, 308):
+            upstream.close()
+            return jsonify(
+                error="Não foi possível iniciar o download. Tente novamente."
+            ), 502
+
+        upstream.raise_for_status()
+
+        filename = secure_filename(os.path.basename(parsed.path)) or "faixa.mp3"
+
+        def stream_file():
+            try:
+                for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                    if chunk:
+                        yield chunk
+            finally:
+                upstream.close()
+
+        headers = {
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Content-Type-Options": "nosniff"
+        }
+
+        length = upstream.headers.get("Content-Length")
+        if length and length.isdigit():
+            headers["Content-Length"] = length
+
+        return Response(
+            stream_file(),
+            content_type=upstream.headers.get(
+                "Content-Type", "application/octet-stream"
+            ),
+            headers=headers
+        )
+
+    except requests.RequestException:
+        return jsonify(
+            error="Não foi possível baixar a faixa. Tente novamente."
+        ), 502
 
 
 @app.errorhandler(413)

@@ -1,6 +1,4 @@
+
 flask
 gunicorn
-requests
-numpy
-soundfile
 imageio-ffmpeg

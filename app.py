@@ -1,7 +1,6 @@
 
 import os
 import re
-import time
 from urllib.parse import urlparse, unquote
 
 import requests
@@ -29,7 +28,6 @@ HTML = r"""
 :root {
     --bg: #090916;
     --panel: #131329;
-    --panel2: #1a1a35;
     --text: #f7f7ff;
     --muted: #aaaac8;
     --purple: #9b5cff;
@@ -166,7 +164,10 @@ button, .choose-button {
     padding: 14px 20px;
     transition: transform .15s, filter .15s;
 }
-button:hover, .choose-button:hover { transform: translateY(-2px); filter: brightness(1.1); }
+button:hover, .choose-button:hover {
+    transform: translateY(-2px);
+    filter: brightness(1.1);
+}
 button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
 .choose-button {
     display: inline-block;
@@ -247,12 +248,21 @@ button:disabled { opacity: .45; cursor: not-allowed; transform: none; }
     display: grid;
     place-items: center;
     font-size: 25px;
-    background: color-mix(in srgb, var(--accent) 15%, transparent);
-    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    background: #ffffff10;
+    border: 1px solid #ffffff20;
 }
 .track-info { flex: 1; min-width: 0; }
-.track-info strong { display: block; font-size: 14px; overflow-wrap: anywhere; }
-.track-info small { display: block; color: var(--muted); font-size: 12px; margin-top: 5px; }
+.track-info strong {
+    display: block;
+    font-size: 14px;
+    overflow-wrap: anywhere;
+}
+.track-info small {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 5px;
+}
 .download {
     flex: 0 0 auto;
     background: var(--accent);
@@ -365,15 +375,18 @@ function showSelectedFile(file) {
         dropArea.classList.add("dragover");
     });
 });
+
 ["dragleave", "drop"].forEach(eventName => {
     dropArea.addEventListener(eventName, event => {
         event.preventDefault();
         dropArea.classList.remove("dragover");
     });
 });
+
 dropArea.addEventListener("drop", event => {
     const files = event.dataTransfer.files;
     if (!files.length) return;
+
     const transfer = new DataTransfer();
     transfer.items.add(files[0]);
     audioFile.files = transfer.files;
@@ -387,8 +400,7 @@ function setStatus(message, isError = false) {
 }
 
 function getTrackInfo(url, fallbackName) {
-    const raw = (url || "") + " " + (fallbackName || "");
-    const text = raw.toLowerCase();
+    const text = ((url || "") + " " + (fallbackName || "")).toLowerCase();
 
     if (text.includes("instrumental")) {
         return { label: "Instrumental", emoji: "🎼" };
@@ -420,6 +432,7 @@ function getTrackInfo(url, fallbackName) {
     if (text.includes("brass")) {
         return { label: "Metais", emoji: "🎺" };
     }
+
     return { label: fallbackName || "Faixa separada", emoji: "🎵" };
 }
 
@@ -444,12 +457,16 @@ function safeFilenamePart(name) {
 function renderTracks(files) {
     trackList.innerHTML = "";
     results.style.display = "block";
-    trackCount.textContent = files.length + (files.length === 1 ? " faixa" : " faixas");
 
-    files.forEach((file, index) => {
-        const url = file.url || file.download_url || file.file || "";
-        if (!url) return;
+    const validFiles = files.filter(file =>
+        file && (file.url || file.download_url || file.file)
+    );
 
+    trackCount.textContent =
+        validFiles.length + (validFiles.length === 1 ? " faixa" : " faixas");
+
+    validFiles.forEach(file => {
+        const url = file.url || file.download_url || file.file;
         const info = getTrackInfo(url, file.name || file.title || "");
         const extension = getExtension(url);
         const base = safeFilenamePart(originalBaseName);
@@ -470,16 +487,19 @@ function renderTracks(files) {
         title.textContent = `${info.emoji} ${base} - ${info.label}`;
 
         const subtitle = document.createElement("small");
-        subtitle.textContent = "Arquivo ." + extension.toUpperCase() + " · Pronto para baixar";
+        subtitle.textContent =
+            "Arquivo ." + extension.toUpperCase() + " · Pronto para baixar";
 
         const button = document.createElement("button");
         button.className = "download";
         button.type = "button";
         button.textContent = "⬇ Baixar";
+
         button.addEventListener("click", () => {
             const downloadUrl = "/api/baixar?url=" +
                 encodeURIComponent(url) +
                 "&name=" + encodeURIComponent(downloadName);
+
             window.location.href = downloadUrl;
         });
 
@@ -491,43 +511,55 @@ function renderTracks(files) {
         trackList.appendChild(row);
     });
 
-    if (!trackList.children.length) {
-        setStatus("O processamento terminou, mas não encontrei links de download válidos.", true);
+    if (!validFiles.length) {
+        setStatus(
+            "O processamento terminou, mas não encontrei links de download válidos.",
+            true
+        );
     } else {
+        setStatus("✅ Música separada com sucesso! Escolha suas faixas abaixo.");
         results.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 }
 
 async function checkStatus(hash) {
     try {
-        const response = await fetch("/api/status/" + encodeURIComponent(hash));
+        const response = await fetch(
+            "/api/status/" + encodeURIComponent(hash)
+        );
+
         const data = await response.json();
 
         if (!response.ok || data.error) {
-            throw new Error(data.error || "Não foi possível consultar o processamento.");
+            throw new Error(
+                data.error || "Não foi possível consultar o processamento."
+            );
         }
 
-        if (data.status === "done" || data.status === "completed" || data.status === "success") {
+        if (data.status === "done") {
             clearInterval(pollingTimer);
             pollingTimer = null;
             submitButton.disabled = false;
             submitButton.textContent = "✨ Separar outra música";
             progressTrack.style.display = "none";
             renderTracks(data.files || []);
-            if (!trackList.children.length) {
-                setStatus("A separação terminou, mas o serviço não retornou faixas para baixar.", true);
-            } else {
-                setStatus("✅ Música separada com sucesso! Escolha suas faixas abaixo.");
-            }
-        } else if (data.status === "error" || data.status === "failed") {
+
+        } else if (data.status === "error") {
             clearInterval(pollingTimer);
             pollingTimer = null;
             submitButton.disabled = false;
             submitButton.textContent = "✨ Tentar novamente";
             progressTrack.style.display = "none";
-            setStatus(data.message || "O processamento falhou. Tente novamente.", true);
+            setStatus(
+                data.message || "O processamento falhou. Tente novamente.",
+                true
+            );
+
         } else {
-            setStatus(data.message || "Estamos separando sua música. Isso pode levar alguns minutos.");
+            setStatus(
+                data.message ||
+                "Estamos separando sua música. Isso pode levar alguns minutos."
+            );
         }
     } catch (error) {
         clearInterval(pollingTimer);
@@ -543,6 +575,7 @@ form.addEventListener("submit", async event => {
     event.preventDefault();
 
     const file = audioFile.files[0];
+
     if (!file) {
         setStatus("Selecione um arquivo de áudio primeiro.", true);
         return;
@@ -553,7 +586,9 @@ form.addEventListener("submit", async event => {
         pollingTimer = null;
     }
 
-    originalBaseName = file.name.replace(/\.[^.]+$/, "").trim() || "Audio";
+    originalBaseName =
+        file.name.replace(/\.[^.]+$/, "").trim() || "Audio";
+
     results.style.display = "none";
     trackList.innerHTML = "";
     submitButton.disabled = true;
@@ -569,25 +604,37 @@ form.addEventListener("submit", async event => {
             method: "POST",
             body: formData
         });
+
         const data = await response.json();
 
         if (!response.ok || data.error) {
-            throw new Error(data.error || "Não foi possível iniciar a separação.");
+            throw new Error(
+                data.error || "Não foi possível iniciar a separação."
+            );
         }
 
         const hash = data.hash || data.job_hash || data.id;
-        if (!hash) throw new Error("O serviço não retornou o identificador do processamento.");
+
+        if (!hash) {
+            throw new Error(
+                "O serviço não retornou o identificador do processamento."
+            );
+        }
 
         submitButton.textContent = "🎧 Separando...";
         setStatus("Arquivo recebido! A separação pode levar alguns minutos.");
 
         pollingTimer = setInterval(() => checkStatus(hash), 4000);
         await checkStatus(hash);
+
     } catch (error) {
         submitButton.disabled = false;
         submitButton.textContent = "✨ Tentar novamente";
         progressTrack.style.display = "none";
-        setStatus(error.message || "Ocorreu um erro ao enviar a música.", true);
+        setStatus(
+            error.message || "Ocorreu um erro ao enviar a música.",
+            true
+        );
     }
 });
 </script>
@@ -607,13 +654,16 @@ def allowed_file(filename):
 def extract_hash(data):
     if not isinstance(data, dict):
         return None
+
     for key in ("hash", "job_hash", "id"):
         value = data.get(key)
-        if value:
-            return str(value)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+
     nested = data.get("data")
     if isinstance(nested, dict):
         return extract_hash(nested)
+
     return None
 
 
@@ -630,7 +680,6 @@ def extract_status(data):
     status_value = data.get("status", data.get("state", "processing"))
     status_text = str(status_value).lower()
 
-    files = []
     possible_files = (
         data.get("files")
         or data.get("results")
@@ -644,6 +693,8 @@ def extract_status(data):
             {"name": key, "url": value}
             for key, value in possible_files.items()
         ]
+
+    files = []
 
     if isinstance(possible_files, list):
         for item in possible_files:
@@ -662,18 +713,25 @@ def extract_status(data):
                         "name": item.get("name") or item.get("title") or ""
                     })
 
-    # Algumas respostas da API usam um campo de resultado diferente.
     if not files:
         for key in ("result", "result_files", "output", "download_links"):
             value = data.get(key)
+
             if isinstance(value, list):
                 for item in value:
                     if isinstance(item, str):
                         files.append({"url": item})
                     elif isinstance(item, dict):
-                        url = item.get("url") or item.get("download_url") or item.get("link")
+                        url = (
+                            item.get("url")
+                            or item.get("download_url")
+                            or item.get("link")
+                        )
                         if url:
-                            files.append({"url": url, "name": item.get("name", "")})
+                            files.append({
+                                "url": url,
+                                "name": item.get("name", "")
+                            })
 
     if files:
         return "done", data.get("message"), files
@@ -681,7 +739,9 @@ def extract_status(data):
     if any(word in status_text for word in ("error", "fail", "failed")):
         return "error", data.get("message") or data.get("error"), []
 
-    if any(word in status_text for word in ("done", "complete", "success", "finished")):
+    if any(word in status_text for word in (
+        "done", "complete", "success", "finished"
+    )):
         return "done", data.get("message"), []
 
     return "processing", data.get("message"), []
@@ -695,7 +755,9 @@ def index():
 @app.route("/api/separar", methods=["POST"])
 def separar():
     if not API_KEY:
-        return jsonify(error="A chave da API não está configurada no servidor."), 500
+        return jsonify(
+            error="A chave da API não está configurada no servidor."
+        ), 500
 
     if "audiofile" not in request.files:
         return jsonify(error="Selecione um arquivo de áudio."), 400
@@ -725,45 +787,61 @@ def separar():
             },
             timeout=120,
         )
+
         response.raise_for_status()
         data = response.json()
 
         job_hash = extract_hash(data)
-        if not job_hash:
-            message = (
-                data.get("message")
-                or data.get("error")
-                or "O serviço não retornou o identificador do processamento."
-            ) if isinstance(data, dict) else "Resposta inválida do serviço."
 
+        if not job_hash:
+            if isinstance(data, dict):
+                message = (
+                    data.get("message")
+                    or data.get("error")
+                    or "O serviço não retornou o identificador do processamento."
+                )
+            else:
+                message = "Resposta inválida do serviço."
+
+            app.logger.error("Resposta inesperada ao criar separação: %s", data)
             return jsonify(error=str(message)), 502
 
         return jsonify(hash=job_hash)
 
     except requests.RequestException:
         app.logger.exception("Erro ao enviar áudio para o serviço de separação.")
-        return jsonify(error="Não foi possível conectar ao serviço de separação. Tente novamente."), 502
+        return jsonify(
+            error="Não foi possível conectar ao serviço de separação. Tente novamente."
+        ), 502
+
     except ValueError:
-        return jsonify(error="O serviço retornou uma resposta inválida."), 502
+        return jsonify(
+            error="O serviço retornou uma resposta inválida."
+        ), 502
 
 
 @app.route("/api/status/<job_hash>", methods=["GET"])
 def status(job_hash):
+    # Validação simplificada: não rejeita hashes por caracteres
+    # que não estavam previstos na validação anterior.
     if not job_hash or len(job_hash) > 200:
         return jsonify(error="Identificador inválido."), 400
 
-    if not re.fullmatch(r"[A-Za-z0-9_-]+", job_hash):
-        return jsonify(error="Identificador inválido."), 400
-
     if not API_KEY:
-        return jsonify(error="A chave da API não está configurada no servidor."), 500
+        return jsonify(
+            error="A chave da API não está configurada no servidor."
+        ), 500
 
     try:
         response = requests.get(
             f"{API_BASE}/separation/get",
-            params={"hash": job_hash, "api_token": API_KEY},
+            params={
+                "hash": job_hash,
+                "api_token": API_KEY,
+            },
             timeout=30,
         )
+
         response.raise_for_status()
         data = response.json()
 
@@ -777,9 +855,14 @@ def status(job_hash):
 
     except requests.RequestException:
         app.logger.exception("Erro ao consultar o status da separação.")
-        return jsonify(error="Não foi possível consultar o processamento."), 502
+        return jsonify(
+            error="Não foi possível consultar o processamento."
+        ), 502
+
     except ValueError:
-        return jsonify(error="O serviço retornou uma resposta inválida."), 502
+        return jsonify(
+            error="O serviço retornou uma resposta inválida."
+        ), 502
 
 
 @app.route("/api/baixar", methods=["GET"])
@@ -790,17 +873,19 @@ def baixar():
     parsed = urlparse(source_url)
     hostname = (parsed.hostname or "").lower()
 
-    # Aceita apenas arquivos hospedados no domínio do serviço de separação.
     if (
         parsed.scheme != "https"
-        or not (hostname == "mvsep.com" or hostname.endswith(".mvsep.com"))
+        or not (
+            hostname == "mvsep.com"
+            or hostname.endswith(".mvsep.com")
+        )
         or parsed.username
         or parsed.password
     ):
         return jsonify(error="Endereço de download inválido."), 400
 
-    # Evita que o nome fornecido pelo navegador injete cabeçalhos.
-    requested_name = unquote(requested_name).replace("\\", "/").split("/")[-1]
+    requested_name = unquote(requested_name)
+    requested_name = requested_name.replace("\\", "/").split("/")[-1]
     requested_name = re.sub(r"[\r\n\x00-\x1f]", "", requested_name)
     requested_name = secure_filename(requested_name.replace(" ", "_"))
 
@@ -817,15 +902,22 @@ def baixar():
 
         if upstream.is_redirect:
             upstream.close()
-            return jsonify(error="O serviço de arquivos redirecionou o download. Tente novamente mais tarde."), 502
+            return jsonify(
+                error="O serviço redirecionou o download. Tente novamente mais tarde."
+            ), 502
 
         if upstream.status_code != 200:
             upstream.close()
-            return jsonify(error="Não foi possível baixar o arquivo neste momento."), 502
+            return jsonify(
+                error="Não foi possível baixar o arquivo neste momento."
+            ), 502
 
         content_type = upstream.headers.get(
-            "Content-Type", "application/octet-stream"
+            "Content-Type",
+            "application/octet-stream"
         )
+
+        content_length = upstream.headers.get("Content-Length")
 
         def stream_file():
             try:
@@ -835,30 +927,35 @@ def baixar():
             finally:
                 upstream.close()
 
-        response = Response(
+        headers = {
+            "Content-Disposition": (
+                f'attachment; filename="{requested_name}"'
+            ),
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        }
+
+        if content_length:
+            headers["Content-Length"] = content_length
+
+        return Response(
             stream_file(),
             content_type=content_type,
-            headers={
-                "Content-Disposition": f'attachment; filename="{requested_name}"',
-                "X-Content-Type-Options": "nosniff",
-                "Cache-Control": "no-store",
-            },
+            headers=headers,
         )
 
-        content_length = upstream.headers.get("Content-Length")
-        if content_length:
-            response.headers["Content-Length"] = content_length
-
-        return response
-
     except requests.RequestException:
-        app.logger.exception("Erro ao buscar o arquivo para download.")
-        return jsonify(error="Falha ao preparar o download. Tente novamente."), 502
+        app.logger.exception("Erro ao preparar o download.")
+        return jsonify(
+            error="Falha ao preparar o download. Tente novamente."
+        ), 502
 
 
 @app.errorhandler(413)
 def file_too_large(_error):
-    return jsonify(error="O arquivo ultrapassa o limite de 100 MB."), 413
+    return jsonify(
+        error="O arquivo ultrapassa o limite de 100 MB."
+    ), 413
 
 
 if __name__ == "__main__":

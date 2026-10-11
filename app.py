@@ -121,9 +121,15 @@ def separar():
 
 @app.get('/api/status/<job_hash>')
 def status(job_hash):
-if not job_hash or len(job_hash) > 200 or any(c not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-' for c in job_hash):        return jsonify(error='Identificador inválido.'), 400
+    if not job_hash or len(job_hash) > 200:
+        return jsonify(error='Identificador inválido.'), 400
+
     try:
-        response = requests.get(f'{MVSEP_API}/separation/get', params={'hash': job_hash}, timeout=30)
+        response = requests.get(
+            f'{MVSEP_API}/separation/get',
+            params={'hash': job_hash},
+            timeout=30
+        )
         payload = response.json()
     except requests.RequestException:
         return jsonify(error='Não consegui consultar o MVSEP. Tente novamente.'), 502

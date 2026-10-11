@@ -40,7 +40,7 @@ const button=document.getElementById('submitBtn');
 const statusBox=document.getElementById('status');
 function showStatus(text){statusBox.style.display='block';statusBox.textContent=text;}
 function findFiles(payload){
-  const original=f.name||f.filename||f.file_name||f.title||f.label||'';
+const original=f.name||f.filename||f.file_name||f.title||f.label||'';
 const filename=original.split('/').pop().toLowerCase();
 
 let label='Faixa '+(i+1);

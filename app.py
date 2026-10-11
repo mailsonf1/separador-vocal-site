@@ -40,17 +40,16 @@ const button=document.getElementById('submitBtn');
 const statusBox=document.getElementById('status');
 function showStatus(text){statusBox.style.display='block';statusBox.textContent=text;}
 function findFiles(payload){
-  const data=payload && payload.data ? payload.data : payload;
-  const files=data && data.files;
-  if(!files) return [];
-  const list=Array.isArray(files) ? files : Object.entries(files).map(([key,value])=>typeof value==='object'&&value!==null?{label:key,...value}:{label:key,url:value});
-  return list.map((f,i)=>{
-    if(typeof f==='string') return {label:'Arquivo '+(i+1),url:f};
-    const url=f.url||f.link||f.download_url||f.file_url||f.href;
-    const label=f.name||f.filename||f.file_name||f.title||f.label||('Faixa '+(i+1));
-    return {label,url};
-  }).filter(f=>typeof f.url==='string' && /^https?:\/\//i.test(f.url));
-}
+  const original=f.name||f.filename||f.file_name||f.title||f.label||'';
+const filename=original.split('/').pop().toLowerCase();
+
+let label='Faixa '+(i+1);
+
+if(filename.includes('vocals')) label='Voz (vocal isolado)';
+else if(filename.includes('drums')) label='Bateria';
+else if(filename.includes('bass')) label='Baixo';
+else if(filename.includes('other')) label='Outros instrumentos';
+else if(filename.includes('instrumental')) label='Instrumental (sem voz)';
 form.addEventListener('submit',async(e)=>{
  e.preventDefault(); const file=document.getElementById('audio').files[0];
  if(!file){showStatus('Escolha um arquivo de áudio primeiro.');return;}

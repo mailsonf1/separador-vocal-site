@@ -1,16 +1,10 @@
 import os
 import re
 import io
-import tempfile
 from urllib.parse import urlparse, unquote
 
-import numpy as np
 import requests
 import soundfile as sf
-from scipy.ndimage import median_filter
-from scipy.signal import stft, istft
-from pedalboard import Pedalboard, HighpassFilter, LowShelfFilter, HighShelfFilter, Compressor, Limiter, Gain
-from pedalboard.io import AudioFile
 from flask import Flask, request, jsonify, render_template_string, Response, send_file
 from werkzeug.utils import secure_filename
 
@@ -19,7 +13,6 @@ app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 
 API_BASE = "https://mvsep.com/api"
 API_KEY = os.environ.get("MVSEP_API_KEY", "")
-INSTRUMENTAL_PRESET_ID = os.environ.get("MVSEP_INSTRUMENTAL_PRESET_ID", "").strip()
 ALLOWED_EXTENSIONS = {"mp3", "wav", "flac", "m4a", "ogg", "aac", "aiff", "wma"}
 
 HTML = r"""
@@ -39,40 +32,19 @@ HTML = r"""
 <header><div class="brand"><div class="brand-mark">♫</div><span>MF<span class="gradient-text">STUDIO</span></span></div><div class="pill">AUDIO LAB · ONLINE</div></header>
 <section class="hero"><div class="eyebrow">Seu som. Do seu jeito.</div><h1>Instrumental<br><span class="gradient-text">sem vocal.</span></h1><p class="subtitle">Envie sua música, gere uma versão instrumental com inteligência artificial e ouça uma prévia gratuita de até 20 segundos antes de baixar.</p></section>
 <section class="panel"><form id="uploadForm"><div class="upload-area" id="dropArea"><div class="upload-icon">🎧</div><h2>Escolha sua música</h2><p>Arraste o arquivo para cá ou selecione no seu dispositivo.</p><label class="choose-button" for="audioFile">📂 Selecionar arquivo</label><input id="audioFile" name="audiofile" type="file" accept=".mp3,.wav,.flac,.m4a,.ogg,.aac,.aiff,.wma" required><div class="file-name" id="fileName"></div></div><button class="primary" id="submitButton" type="submit">✨ Separar minha música</button></form><div class="status" id="status"></div><div class="progress-track" id="progressTrack"><div class="progress-bar"></div></div></section>
-<section class="panel results" id="results"><div class="section-title"><h2>🎵 Suas faixas</h2><span id="trackCount"></span></div><div class="track-list" id="trackList"></div><div style="margin-top:18px"><button class="secondary" id="instrumentalButton" type="button">🎼 Gerar instrumental corrigida por fase</button><p class="fineprint">Usa o preset Phase-corrected salvo na sua conta MVSEP. A integração precisa do ID desse preset configurado no servidor.</p></div></section>
-<footer>MFSTUDIO · Ferramentas para quem ama música<div class="fineprint">A masterização automática é processada no servidor. Ela reduz alguns artefatos e ajusta dinâmica e nível; o resultado depende da qualidade da faixa original e não garante reconstrução perfeita do áudio perdido.</div></footer></div>
+<section class="panel results" id="results"><div class="section-title"><h2>🎼 Sua instrumental</h2><span id="trackCount"></span></div><div class="track-list" id="trackList"></div></section>
+<footer>MFSTUDIO · Sua música, sem vocal</footer></div>
 <script>
-const form=document.getElementById('uploadForm'),audioFile=document.getElementById('audioFile'),fileName=document.getElementById('fileName'),dropArea=document.getElementById('dropArea'),statusBox=document.getElementById('status'),submitButton=document.getElementById('submitButton'),progressTrack=document.getElementById('progressTrack'),results=document.getElementById('results'),trackList=document.getElementById('trackList'),trackCount=document.getElementById('trackCount'),instrumentalButton=document.getElementById('instrumentalButton');
+const form=document.getElementById('uploadForm'),audioFile=document.getElementById('audioFile'),fileName=document.getElementById('fileName'),dropArea=document.getElementById('dropArea'),statusBox=document.getElementById('status'),submitButton=document.getElementById('submitButton'),progressTrack=document.getElementById('progressTrack'),results=document.getElementById('results'),trackList=document.getElementById('trackList'),trackCount=document.getElementById('trackCount');
 let originalBaseName='Audio',pollingTimer=null;
 audioFile.addEventListener('change',()=>showSelectedFile(audioFile.files[0]));
 function showSelectedFile(file){if(!file)return;fileName.textContent='✓ '+file.name;fileName.style.display='block';originalBaseName=file.name.replace(/\.[^.]+$/,'').trim()||'Audio'}
 ['dragenter','dragover'].forEach(n=>dropArea.addEventListener(n,e=>{e.preventDefault();dropArea.classList.add('dragover')}));['dragleave','drop'].forEach(n=>dropArea.addEventListener(n,e=>{e.preventDefault();dropArea.classList.remove('dragover')}));
-dropArea.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(!files.length)return;const dt=new DataTransfer();dt.items.add(files[0]);audioFile.files=dt.files;showSelectedFile(files[0])});
+dropArea.addEventListener('drop',e=>{const files=e.dataTransfer.files;if(!files.length)return;const f=files[0];const dt=new DataTransfer();dt.items.add(f);audioFile.files=dt.files;showSelectedFile(f)});
 function setStatus(message,isError=false){statusBox.textContent=message;statusBox.style.display='block';statusBox.classList.toggle('error',isError)}
-function getTrackInfo(url,name){const t=((url||'')+' '+(name||'')).toLowerCase();if(t.includes('instrumental'))return{label:'Instrumental',emoji:'🎼'};if(t.includes('vocal')||t.includes('voice'))return{label:'Voz isolada',emoji:'🎤'};if(t.includes('drum'))return{label:'Bateria',emoji:'🥁'};if(t.includes('bass'))return{label:'Baixo',emoji:'🎸'};if(t.includes('other'))return{label:'Outros instrumentos',emoji:'🎹'};if(t.includes('guitar'))return{label:'Guitarra',emoji:'🎸'};if(t.includes('piano'))return{label:'Piano',emoji:'🎹'};if(t.includes('strings'))return{label:'Cordas',emoji:'🎻'};if(t.includes('woodwind'))return{label:'Sopros',emoji:'🎷'};if(t.includes('brass'))return{label:'Metais',emoji:'🎺'};return{label:name||'Faixa separada',emoji:'🎵'}}
-function getExtension(url){try{const p=new URL(url,location.origin).pathname,m=p.match(/\.([a-z0-9]{2,5})$/i);return m?m[1].toLowerCase():'mp3'}catch{return'mp3'}}
 function safeFilenamePart(n){return n.replace(/[<>:"/\\|?*\x00-\x1F]/g,'_').replace(/\s+/g,' ').trim().replace(/[. ]+$/,'')||'Audio'}
-function downloadUrl(url,name){return '/api/baixar?url='+encodeURIComponent(url)+'&name='+encodeURIComponent(name)}
-function addMasterPanel(row,url,downloadName,trackTitle){
- const panel=document.createElement('div');panel.className='master-panel';
- const heading=document.createElement('h3');heading.textContent='✨ Masterização automática: '+trackTitle;
- const help=document.createElement('p');help.className='master-help';help.textContent='Um clique para reduzir parte dos artefatos metálicos/robóticos e ajustar automaticamente a dinâmica e o volume. O arquivo original permanece intacto. Compare o original com o resultado antes de decidir qual baixar.';
- const actions=document.createElement('div');actions.className='master-actions';
- const process=document.createElement('button');process.className='process-btn';process.textContent='✨ Masterizar automaticamente';
- const originalBtn=document.createElement('button');originalBtn.className='secondary';originalBtn.textContent='▶ Ouvir original';
- const originalAudio=document.createElement('audio');originalAudio.className='preview';originalAudio.controls=true;
- const resultLabel=document.createElement('p');resultLabel.className='master-help';resultLabel.textContent='Resultado masterizado';resultLabel.style.display='none';
- const processedAudio=document.createElement('audio');processedAudio.className='preview';processedAudio.controls=true;
- const download=document.createElement('button');download.className='download';download.textContent='⬇ Baixar masterizada';download.style.display='none';
- actions.append(process,originalBtn,download);panel.append(heading,help,actions,originalAudio,resultLabel,processedAudio);row.append(panel);
- let originalBlobUrl=null,processedBlobUrl=null;
- originalBtn.addEventListener('click',async()=>{try{originalBtn.disabled=true;originalBtn.textContent='⏳ Carregando original...';const r=await fetch(downloadUrl(url,downloadName));if(!r.ok)throw new Error('Não foi possível carregar a faixa original.');const blob=await r.blob();if(originalBlobUrl)URL.revokeObjectURL(originalBlobUrl);originalBlobUrl=URL.createObjectURL(blob);originalAudio.src=originalBlobUrl;originalAudio.style.display='block';await originalAudio.play();}catch(err){setStatus(err.message||'Falha ao abrir o original.',true)}finally{originalBtn.disabled=false;originalBtn.textContent='▶ Ouvir original'}});
- process.addEventListener('click',async()=>{process.disabled=true;process.textContent='⏳ Analisando e masterizando no servidor...';setStatus('A masterização automática de '+trackTitle+' começou. Aguarde enquanto o servidor processa o áudio...');try{const r=await fetch('/api/masterizar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url,name:downloadName})});if(!r.ok){let message='Não foi possível masterizar esta faixa.';try{const j=await r.json();message=j.error||message}catch{}throw new Error(message)}const blob=await r.blob();if(processedBlobUrl)URL.revokeObjectURL(processedBlobUrl);processedBlobUrl=URL.createObjectURL(blob);processedAudio.src=processedBlobUrl;processedAudio.style.display='block';resultLabel.style.display='block';download.style.display='inline-block';download.onclick=()=>{const a=document.createElement('a');a.href=processedBlobUrl;a.download=downloadName.replace(/\.[^.]+$/,'')+' - Masterizada.wav';document.body.append(a);a.click();a.remove()};setStatus('✅ Masterização concluída para '+trackTitle+'. Ouça o original e o resultado para comparar; a faixa original continua disponível.');panel.scrollIntoView({behavior:'smooth',block:'nearest'});}catch(err){setStatus(err.message||'Não foi possível concluir a masterização.',true)}finally{process.disabled=false;process.textContent='✨ Masterizar automaticamente'}});
- return panel
-}
-function renderTracks(files,append=false){if(!append)trackList.innerHTML='';results.style.display='block';const valid=files.filter(f=>f&&(f.url||f.download_url||f.file));valid.forEach(file=>{const url=file.url||file.download_url||file.file,info=getTrackInfo(url,file.name||file.title||''),ext=getExtension(url),base=safeFilenamePart(originalBaseName),name=base+' - '+info.label+'.'+ext,row=document.createElement('div');row.className='track';const top=document.createElement('div');top.className='track-top';const icon=document.createElement('div');icon.className='track-icon';icon.textContent=info.emoji;const details=document.createElement('div');details.className='track-info';const title=document.createElement('strong');title.textContent=info.emoji+' '+base+' - '+info.label;const subtitle=document.createElement('small');subtitle.textContent='Arquivo .'+ext.toUpperCase()+' · Pronto para baixar';details.append(title,subtitle);const actions=document.createElement('div');actions.className='track-actions';const dl=document.createElement('button');dl.className='download';dl.type='button';dl.textContent='⬇ Baixar original';dl.addEventListener('click',()=>location.href=downloadUrl(url,name));const master=document.createElement('button');master.className='master-btn';master.type='button';master.textContent='🎚️ Masterizar';actions.append(dl,master);top.append(icon,details,actions);row.append(top);const previewLabel=document.createElement('p');previewLabel.className='preview-note';previewLabel.textContent='▶ Prévia gratuita de até 20 segundos';const preview=document.createElement('audio');preview.className='track-preview';preview.controls=true;preview.preload='metadata';preview.src=url;preview.addEventListener('play',()=>{if(preview.currentTime>=20)preview.currentTime=0});preview.addEventListener('timeupdate',()=>{if(preview.currentTime>=20){preview.pause();preview.currentTime=20}});preview.addEventListener('seeking',()=>{if(preview.currentTime>20)preview.currentTime=20});row.append(previewLabel,preview);const panel=addMasterPanel(row,url,name,info.label);master.addEventListener('click',()=>{const open=panel.style.display==='block';panel.style.display=open?'none':'block';master.textContent=open?'🎚️ Masterizar':'✕ Fechar masterização'});trackList.append(row)});const total=trackList.querySelectorAll('.track').length;trackCount.textContent=total+(total===1?' faixa':' faixas');if(!valid.length)setStatus('O processamento terminou, mas não encontrei links de download válidos.',true);else{setStatus(append?'✅ Instrumental corrigida adicionada às faixas!':'✅ Música separada com sucesso! Baixe as faixas ou abra Masterizar para ajustar cada uma.');results.scrollIntoView({behavior:'smooth',block:'start'})}}
-async function checkStatus(hash,appendResults=false){try{const r=await fetch('/api/status/'+encodeURIComponent(hash)),data=await r.json();if(!r.ok||data.error)throw new Error(data.error||'Não foi possível consultar o processamento.');if(data.status==='done'){clearInterval(pollingTimer);pollingTimer=null;submitButton.disabled=false;submitButton.textContent='✨ Separar outra música';progressTrack.style.display='none';renderTracks(data.files||[],appendResults);if(appendResults){instrumentalButton.disabled=false;instrumentalButton.textContent='🎼 Gerar instrumental corrigida por fase'}}else if(data.status==='error'){clearInterval(pollingTimer);pollingTimer=null;submitButton.disabled=false;submitButton.textContent='✨ Tentar novamente';progressTrack.style.display='none';setStatus(data.message||'O processamento falhou. Tente novamente.',true);if(appendResults){instrumentalButton.disabled=false;instrumentalButton.textContent='🎼 Tentar instrumental novamente'}}else setStatus(data.message||'Estamos separando sua música. Isso pode levar alguns minutos.')}catch(err){clearInterval(pollingTimer);pollingTimer=null;submitButton.disabled=false;submitButton.textContent='✨ Tentar novamente';progressTrack.style.display='none';setStatus(err.message||'Erro ao consultar o processamento.',true);if(appendResults){instrumentalButton.disabled=false;instrumentalButton.textContent='🎼 Tentar instrumental novamente'}}}
-instrumentalButton.addEventListener('click',async()=>{const file=audioFile.files[0];if(!file){setStatus('Selecione novamente o arquivo original para gerar a instrumental corrigida.',true);return}if(pollingTimer){clearInterval(pollingTimer);pollingTimer=null}instrumentalButton.disabled=true;instrumentalButton.textContent='⏳ Enviando para correção de fase...';progressTrack.style.display='block';setStatus('Enviando o áudio ao preset Phase-corrected da MVSEP. Aguarde...');try{const fd=new FormData();fd.append('audiofile',file);const r=await fetch('/api/instrumental',{method:'POST',body:fd});const data=await r.json();if(!r.ok||data.error)throw new Error(data.error||'Não foi possível iniciar a instrumental corrigida.');const hash=data.hash||data.job_hash||data.id;if(!hash)throw new Error('A MVSEP não retornou o identificador do processamento.');instrumentalButton.textContent='🎼 Processando instrumental...';setStatus('Preset recebido! A MVSEP está gerando a instrumental corrigida.');pollingTimer=setInterval(()=>checkStatus(hash,true),4000);await checkStatus(hash,true)}catch(err){instrumentalButton.disabled=false;instrumentalButton.textContent='🎼 Tentar instrumental novamente';progressTrack.style.display='none';setStatus(err.message||'Falha ao iniciar a instrumental corrigida.',true)}});
+function renderInstrumental(file){trackList.innerHTML='';results.style.display='block';if(!file||!(file.url||file.download_url||file.file)){setStatus('A separação terminou, mas a MVSEP não retornou uma instrumental identificável. Nenhuma outra faixa será exibida.',true);return}const url=file.url||file.download_url||file.file;let ext='mp3';try{const path=new URL(url,location.origin).pathname,m=path.match(/\.([a-z0-9]{2,5})$/i);if(m)ext=m[1].toLowerCase()}catch{}const name=safeFilenamePart(originalBaseName)+' - Instrumental.'+ext;const row=document.createElement('div');row.className='track';const top=document.createElement('div');top.className='track-top';const icon=document.createElement('div');icon.className='track-icon';icon.textContent='🎼';const details=document.createElement('div');details.className='track-info';const title=document.createElement('strong');title.textContent=safeFilenamePart(originalBaseName)+' - Instrumental';const subtitle=document.createElement('small');subtitle.textContent='Arquivo .'+ext.toUpperCase()+' · Instrumental sem vocal';details.append(title,subtitle);const actions=document.createElement('div');actions.className='track-actions';const dl=document.createElement('button');dl.className='download';dl.type='button';dl.textContent='⬇ Baixar instrumental';dl.addEventListener('click',()=>{location.href='/api/baixar?url='+encodeURIComponent(url)+'&name='+encodeURIComponent(name)});actions.append(dl);top.append(icon,details,actions);row.append(top);const label=document.createElement('p');label.className='preview-note';label.textContent='▶ Prévia gratuita limitada a 20 segundos';const preview=document.createElement('audio');preview.className='track-preview';preview.controls=true;preview.preload='none';preview.src='/api/preview?url='+encodeURIComponent(url);row.append(label,preview);trackList.append(row);trackCount.textContent='1 instrumental';setStatus('✅ Instrumental pronta! Você pode ouvir a prévia e baixar a faixa completa.');results.scrollIntoView({behavior:'smooth',block:'start'})}
+async function checkStatus(hash){try{const r=await fetch('/api/status/'+encodeURIComponent(hash)),data=await r.json();if(!r.ok||data.error)throw new Error(data.error||'Não foi possível consultar o processamento.');if(data.status==='done'){clearInterval(pollingTimer);pollingTimer=null;submitButton.disabled=false;submitButton.textContent='✨ Separar outra música';progressTrack.style.display='none';if(data.files&&data.files.length===1){renderInstrumental(data.files[0])}else{results.style.display='block';trackList.innerHTML='';setStatus(data.message||'O processamento terminou, mas não foi possível identificar com segurança o arquivo instrumental. Verifique o formato de saída da MVSEP.',true)}}else if(data.status==='error'){clearInterval(pollingTimer);pollingTimer=null;submitButton.disabled=false;submitButton.textContent='✨ Tentar novamente';progressTrack.style.display='none';setStatus(data.message||'O processamento falhou. Tente novamente.',true)}else setStatus(data.message||'Estamos separando sua música. Isso pode levar alguns minutos.')}catch(err){clearInterval(pollingTimer);pollingTimer=null;submitButton.disabled=false;submitButton.textContent='✨ Tentar novamente';progressTrack.style.display='none';setStatus(err.message||'Erro ao consultar o processamento.',true)}}
 form.addEventListener('submit',async e=>{e.preventDefault();const file=audioFile.files[0];if(!file){setStatus('Selecione um arquivo de áudio primeiro.',true);return}if(pollingTimer){clearInterval(pollingTimer);pollingTimer=null}originalBaseName=file.name.replace(/\.[^.]+$/,'').trim()||'Audio';results.style.display='none';trackList.innerHTML='';submitButton.disabled=true;submitButton.textContent='⏳ Enviando música...';progressTrack.style.display='block';setStatus('Enviando seu arquivo. Aguarde...');try{const fd=new FormData();fd.append('audiofile',file);const r=await fetch('/api/separar',{method:'POST',body:fd}),data=await r.json();if(!r.ok||data.error)throw new Error(data.error||'Não foi possível iniciar a separação.');const hash=data.hash||data.job_hash||data.id;if(!hash)throw new Error('O serviço não retornou o identificador do processamento.');submitButton.textContent='🎧 Separando...';setStatus('Arquivo recebido! A separação pode levar alguns minutos.');pollingTimer=setInterval(()=>checkStatus(hash),4000);await checkStatus(hash)}catch(err){submitButton.disabled=false;submitButton.textContent='✨ Tentar novamente';progressTrack.style.display='none';setStatus(err.message||'Ocorreu um erro ao enviar a música.',true)}});
 </script></body></html>
 """
@@ -136,6 +108,23 @@ def extract_status(data):
     return "processing", data.get("message"), []
 
 
+def select_instrumental(files):
+    """Return only a confidently labelled instrumental/accompaniment result."""
+    matches = []
+    for item in files or []:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("download_url") or item.get("file") or "")
+        name = str(item.get("name") or item.get("title") or item.get("label") or "")
+        label = (name + " " + urlparse(url).path).lower().replace("%20", " ")
+        label = label.replace("_", " ").replace("-", " ")
+        if any(word in label for word in ("instrumental", "no vocals", "no vocal", "accompaniment", "instrumental track")):
+            if not any(word in label for word in ("vocals only", "vocal only", "isolated vocal", "voice only")):
+                matches.append(item)
+    # Ambiguous output names must not expose vocals or other stems.
+    return matches if len(matches) == 1 else []
+
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML)
@@ -184,6 +173,11 @@ def status(job_hash):
         response = requests.get(f"{API_BASE}/separation/get", params={"hash": job_hash, "api_token": API_KEY}, timeout=30)
         response.raise_for_status()
         state, message, files = extract_status(response.json())
+        if state == "done":
+            instrumental = select_instrumental(files)
+            if not instrumental:
+                return jsonify(status="error", message="A MVSEP terminou, mas o nome do arquivo instrumental não pôde ser identificado com segurança. Nenhuma faixa foi liberada. Confira os nomes de saída da MVSEP."), 502
+            files = instrumental
         return jsonify(status=state, message=message, files=files)
     except requests.RequestException:
         app.logger.exception("Erro ao consultar o status da separação.")
@@ -192,163 +186,42 @@ def status(job_hash):
         return jsonify(error="O serviço retornou uma resposta inválida."), 502
 
 
-@app.route("/api/instrumental", methods=["POST"])
-def gerar_instrumental_corrigida():
-    """Executa um preset Phase-corrected salvo na conta MVSEP do proprietário."""
-    if not API_KEY:
-        return jsonify(error="A chave da API da MVSEP não está configurada no servidor."), 500
-    if not INSTRUMENTAL_PRESET_ID:
-        return jsonify(error="Falta configurar MVSEP_INSTRUMENTAL_PRESET_ID no Render. Salve o fluxo Phase-corrected como preset na MVSEP e configure o ID dele nas variáveis de ambiente."), 503
-    if "audiofile" not in request.files:
-        return jsonify(error="Selecione o arquivo de áudio original."), 400
-    audio = request.files["audiofile"]
-    if not audio.filename or not allowed_file(audio.filename):
-        return jsonify(error="Envie um arquivo de áudio válido."), 400
-    try:
-        response = requests.post(
-            f"{API_BASE}/separation/create",
-            data={"api_token": API_KEY, "preset_id": INSTRUMENTAL_PRESET_ID},
-            files={"audiofile": (secure_filename(audio.filename), audio.stream, audio.mimetype or "application/octet-stream")},
-            timeout=120,
-        )
-        response.raise_for_status()
-        data = response.json()
-        job_hash = extract_hash(data)
-        if not job_hash:
-            nested = data.get("data", {}) if isinstance(data, dict) else {}
-            message = (nested.get("message") or data.get("message") or data.get("error") or "A MVSEP não retornou o identificador do preset.") if isinstance(nested, dict) and isinstance(data, dict) else "Resposta inválida da MVSEP."
-            app.logger.error("Resposta inesperada ao criar preset instrumental: %s", data)
-            return jsonify(error=str(message)), 502
-        return jsonify(hash=job_hash)
-    except requests.RequestException:
-        app.logger.exception("Erro ao enviar áudio para o preset instrumental MVSEP.")
-        return jsonify(error="Não foi possível conectar à MVSEP para gerar a instrumental corrigida."), 502
-    except ValueError:
-        return jsonify(error="A MVSEP retornou uma resposta inválida."), 502
-
-
-
-def _validated_mvsep_url(source_url):
-    parsed = urlparse(source_url or "")
+@app.route("/api/preview", methods=["GET"])
+def preview():
+    """Stream only the first 20 seconds, re-encoded as WAV on the server."""
+    source_url = request.args.get("url", "")
+    parsed = urlparse(source_url)
     hostname = (parsed.hostname or "").lower()
     if parsed.scheme != "https" or not (hostname == "mvsep.com" or hostname.endswith(".mvsep.com")) or parsed.username or parsed.password:
-        raise ValueError("Endereço de áudio inválido.")
-    return source_url
-
-
-def _reduce_spectral_spikes(audio, strength=0.28, sample_rate=44100):
-    """Redução conservadora de picos espectrais estreitos; não é restauração neural."""
-    output = np.asarray(audio, dtype=np.float32).copy()
-    longest = output.shape[1]
-    desired = 2048 if sample_rate >= 32000 else 1024
-    n_fft = min(desired, max(256, 2 ** int(np.floor(np.log2(max(256, longest))))))
-    hop = n_fft // 4
-    for channel in range(output.shape[0]):
-        _, times, spectrum = stft(output[channel], fs=sample_rate, nperseg=n_fft,
-                                  noverlap=n_fft-hop, boundary="zeros", padded=True)
-        magnitude = np.abs(spectrum)
-        local = median_filter(magnitude, size=(5, 1), mode="nearest")
-        ratio = magnitude / (local + 1e-7)
-        # Attenua apenas picos muito mais fortes que a vizinhança, de forma moderada.
-        excess = np.clip((ratio - 2.8) / 5.0, 0.0, 0.55)
-        mask = 1.0 - (strength * excess)
-        cleaned_spectrum = spectrum * mask
-        _, reconstructed = istft(cleaned_spectrum, fs=sample_rate, nperseg=n_fft,
-                                 noverlap=n_fft-hop, input_onesided=True,
-                                 boundary=True)
-        if len(reconstructed) < output.shape[1]:
-            reconstructed = np.pad(reconstructed, (0, output.shape[1]-len(reconstructed)))
-        output[channel] = reconstructed[:output.shape[1]].astype(np.float32)
-    return output
-
-
-@app.route("/api/masterizar", methods=["POST"])
-def masterizar():
-    payload = request.get_json(silent=True) or {}
+        return jsonify(error="Endereço de prévia inválido."), 400
     try:
-        source_url = _validated_mvsep_url(payload.get("url", ""))
-    except ValueError as exc:
-        return jsonify(error=str(exc)), 400
-
-    requested_name = str(payload.get("name") or "Audio - Faixa.wav")
-    requested_name = re.sub(r"[\\/\r\n\x00-\x1f]", "_", requested_name)[:180]
-    parsed = urlparse(source_url)
-    suffix = os.path.splitext(parsed.path)[1].lower()
-    if suffix not in {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".aiff", ".wma"}:
-        suffix = ".audio"
-
-    try:
-        with requests.get(source_url, stream=True, timeout=(15, 120), allow_redirects=False) as upstream:
-            if upstream.is_redirect:
-                return jsonify(error="O serviço de áudio redirecionou o download. Tente novamente."), 502
-            if upstream.status_code != 200:
-                return jsonify(error="Não foi possível obter a faixa para masterização."), 502
-            chunks = []
-            total = 0
-            for chunk in upstream.iter_content(chunk_size=1024 * 256):
+        with requests.get(source_url, stream=True, timeout=(15, 90), allow_redirects=False) as upstream:
+            if upstream.is_redirect or upstream.status_code != 200:
+                return jsonify(error="Não foi possível carregar a prévia. Tente novamente."), 502
+            chunks, total = [], 0
+            for chunk in upstream.iter_content(chunk_size=256 * 1024):
                 if not chunk:
                     continue
                 total += len(chunk)
                 if total > 100 * 1024 * 1024:
-                    return jsonify(error="Esta faixa ultrapassa o limite de 100 MB para masterização."), 413
+                    return jsonify(error="O arquivo ultrapassa o limite para gerar a prévia."), 413
                 chunks.append(chunk)
-        raw_audio = b"".join(chunks)
-        with tempfile.TemporaryDirectory(prefix="mfstudio_") as temp_dir:
-            input_path = os.path.join(temp_dir, "input" + suffix)
-            output_path = os.path.join(temp_dir, "masterizada.wav")
-            with open(input_path, "wb") as audio_file:
-                audio_file.write(raw_audio)
-            try:
-                with AudioFile(input_path) as audio_file:
-                    sample_rate = int(audio_file.samplerate)
-                    frames = int(audio_file.frames)
-                    channels = int(audio_file.num_channels)
-                    if sample_rate < 8000 or sample_rate > 192000 or channels < 1 or channels > 2:
-                        return jsonify(error="Formato de áudio não suportado para masterização."), 415
-                    if frames / sample_rate > 600:
-                        return jsonify(error="Para manter o serviço estável, a masterização automática está limitada a 10 minutos por faixa."), 413
-                    audio = audio_file.read(frames).astype(np.float32)
-            except Exception as exc:
-                app.logger.info("Não foi possível decodificar a faixa: %s", exc)
-                return jsonify(error="Não foi possível decodificar este formato de áudio. Tente baixar a faixa original em MP3 ou WAV e verificar se o arquivo está íntegro."), 415
-
-            if audio.ndim == 1:
-                audio = audio.reshape(1, -1)
-            if audio.shape[0] != channels and audio.shape[1] == channels:
-                audio = audio.T
-            if audio.size == 0:
-                return jsonify(error="A faixa de áudio está vazia."), 400
-
-            # Limpeza conservadora, EQ suave, compressão leve e limitação de picos.
-            cleaned = _reduce_spectral_spikes(audio, strength=0.30, sample_rate=sample_rate)
-            board = Pedalboard([
-                HighpassFilter(cutoff_frequency_hz=28.0),
-                LowShelfFilter(cutoff_frequency_hz=120.0, gain_db=0.8),
-                HighShelfFilter(cutoff_frequency_hz=min(10000.0, sample_rate * 0.42), gain_db=0.4),
-                Compressor(threshold_db=-18.0, ratio=2.0, attack_ms=10.0, release_ms=120.0),
-                Limiter(threshold_db=-1.0, release_ms=100.0),
-            ])
-            processed = board(cleaned, sample_rate)
-            peak = float(np.max(np.abs(processed))) if processed.size else 0.0
-            if peak > 1e-8:
-                # Alvo de pico conservador, sem aumentar áudio silencioso de forma agressiva.
-                target_peak = 10 ** (-1.0 / 20.0)
-                gain = min(target_peak / peak, 10 ** (6.0 / 20.0))
-                processed = processed * gain
-            processed = np.clip(processed, -0.999, 0.999).astype(np.float32)
-            with AudioFile(output_path, "w", sample_rate, processed.shape[0]) as out_file:
-                out_file.write(processed)
-            with open(output_path, "rb") as result_file:
-                result_bytes = result_file.read()
-            return send_file(io.BytesIO(result_bytes), mimetype="audio/wav", as_attachment=True,
-                             download_name=(os.path.splitext(secure_filename(requested_name))[0] or "Audio") + " - Masterizada.wav",
-                             max_age=0)
+        raw = b"".join(chunks)
+        try:
+            audio, sample_rate = sf.read(io.BytesIO(raw), dtype="float32", always_2d=True)
+        except Exception:
+            app.logger.exception("Formato não suportado ao gerar prévia de áudio.")
+            return jsonify(error="Não foi possível gerar a prévia deste formato de áudio. Tente uma saída MP3, WAV ou FLAC na MVSEP."), 415
+        if sample_rate < 8000 or sample_rate > 192000 or audio.size == 0:
+            return jsonify(error="O arquivo de áudio não é válido para prévia."), 415
+        audio = audio[:int(sample_rate * 20)]
+        output = io.BytesIO()
+        sf.write(output, audio, sample_rate, format="WAV", subtype="PCM_16")
+        output.seek(0)
+        return send_file(output, mimetype="audio/wav", as_attachment=False, download_name="mfstudio-preview.wav", max_age=0)
     except requests.RequestException:
-        app.logger.exception("Falha ao obter faixa para masterização.")
-        return jsonify(error="Não foi possível obter a faixa do serviço de separação. Tente novamente."), 502
-    except Exception:
-        app.logger.exception("Erro inesperado durante a masterização automática.")
-        return jsonify(error="Ocorreu um erro durante a masterização automática. Tente novamente com uma faixa menor."), 500
+        app.logger.exception("Falha ao buscar áudio para prévia.")
+        return jsonify(error="Não foi possível obter o áudio para a prévia."), 502
 
 
 @app.route("/api/baixar", methods=["GET"])
